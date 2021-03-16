@@ -3,3 +3,9 @@ uint32 300 <= baudrate <= 921600
 uint8 0 <= rtscts <= 1
 double 20 <= adv-interval-ms <= 40959.375
 uint16 32 <= adv-interval
+flag active-scan
+switch display-only
+switch keyboard-only
+switch display-keyboard
+switch display-yes-no
+switch no-display-no-keyboard

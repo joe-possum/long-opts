@@ -1,6 +1,6 @@
-#include "app.h"
+#include "cmdline.h"
 
 int main(int argc, char *argv[]) {
-  app_parse_cmdline(argc, argv);
+  cmdline_parse(argc, argv);
   return 0;
 }

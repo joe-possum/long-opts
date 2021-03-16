@@ -1,5 +1,5 @@
-auto : main.c auto.c
+cmdline : main.c cmdline.c
 	gcc -Wall -o $@ $^
 
-auto.c : parse-opt.py opt.ascii
+cmdline.c cmdline.h : parse-opt.py opt.ascii
 	python3 $^

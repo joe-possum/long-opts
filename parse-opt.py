@@ -44,6 +44,10 @@ def as_ctype(t) :
         return 'uint32_t'
     if 'double' == t :
         return t
+    if 'bool' == t :
+        return t
+    if 'switch' == t :
+        return None
 
 struct_option = """struct option options[%d] = {
 """
@@ -54,6 +58,10 @@ support_code = """
 int parse_double(const char *arg, double *value) {
   if(1 != sscanf(arg,"%lg",value)) return -1;
   return 0;
+}
+
+void dump_switch(const char *name) {
+  printf("  switch %s: set\\n",name);
 }
 
 void dump_string(const char *name, const char *value) {
@@ -74,6 +82,10 @@ void dump_uint16(const char *name, uint16_t value) {
 
 void dump_uint32(const char *name, uint32_t value) {
   printf("  uint32 %s: '%u / 0x%08x'\\n",name,value,value);
+}
+
+void dump_flag(const char *name) {
+  printf("  option %s: is set\\n",name);
 }
 """
 uint_template = """
@@ -102,6 +114,9 @@ def gen_get_value(ptype,cname,name) :
     if 'string' == ptype :
         return """
       cmdline_options.%s.value = optarg;""" % (cname)
+    if 'bool' == ptype :
+        return """
+      cmdline_options.%s.value = 1;""" % (cname)
     text = """
       switch(parse_%s(optarg,&cmdline_options.%s.value)) {
         case 0:
@@ -151,7 +166,7 @@ class Function_Code :
         self.body.append(text)
     def render(self) :
         text = """
-void app_parse_cmdline(int argc, char *argv[]) {
+void cmdline_parse(int argc, char *argv[]) {
   int done = 0;
   do {
     int indexptr, ch;
@@ -159,7 +174,7 @@ void app_parse_cmdline(int argc, char *argv[]) {
         text += "".join(self.body)
         text += """
     case 'h':
-      printf("Help!\\n");
+      cmdline_help();
       break;
     case -1:
       printf("End of options\\n");
@@ -185,23 +200,37 @@ class Cmdline_Options :
     def add(self,option) :
         text = """
   struct {
-    uint8_t set;
-    %s value;
-  } %s;""" % (option['ctype'],option['cname'])
+    uint8_t set;"""
+        if 'flag' != option['type'] and 'switch' != option['type'] :
+            text += """
+    %s value;""" % (option['ctype'])
+        text += """
+  } %s;""" % (option['cname'])
         self.body.append(text)
         text = """
-  if(cmdline_options.%s.set) {
-    dump_%s("%s",cmdline_options.%s.value);
-  }""" % (option['cname'],option['type'],option['cname'],option['cname'])
-        self.dump.append(text)
-        
+  if(cmdline_options.%s.set) {""" % (option['cname'])
+        if 'flag' == option['type'] :
+            text += """
+    dump_flag("%s");""" % (option['cname'])
+        elif 'switch' == option['type'] :
+            text += """
+    dump_switch("%s");""" % (option['cname'])
+        else :
+            text += """
+    dump_%s("%s",cmdline_options.%s.value);""" % (option['type'],option['cname'],option['cname'])
+        text += """
+  }""" 
+        self.dump.append(text)     
     def h_code(self) :
         text = """
 struct cmdline_options {"""
         text += "".join(self.body)
         text += """
 };
-extern struct cmdline_options cmdline_options;"""
+
+extern struct cmdline_options cmdline_options;
+void cmdline_parse(int argc, char *argv[]);
+"""
         return text
     def c_code(self) :
         text = """
@@ -211,14 +240,47 @@ struct cmdline_options cmdline_options;
 void dump_cmdline_options(void) {"""
         text += "".join(self.dump)
         text += """
-}"""
+}
+"""
+        return text
+
+class Cmdline_Help :
+    def __init__(self) :
+        self.body = []
+    def add(self,option) :
+        print(option)
+        text = '--%s=<%s>' % (option['name'],option['type'])
+        if option['lrel'] or option['rrel'] :
+            lrel = option['lrel']
+            rrel = option['rrel']
+            text += '  Limits: '
+            if lrel :
+                text += '%s %s value ' % (lrel[0],lrel[1])
+            if rrel :
+                if not lrel :
+                    text += 'value '
+                text += '%s %s' % (rrel[0], rrel[1])
+        self.body.append(text)
+    def c_code(self) :
+        text = """
+void cmdline_help(void) {
+  printf("Command-line Help\\n");
+"""
+        for line in self.body :
+            text += '  printf("  %s\\n");\n' % (line)
+        text += '}\n\n'
         return text
     
 function_code = Function_Code()
 cmdline_options = Cmdline_Options()
+cmdline_help = Cmdline_Help()
 
 for name in options :
     ctype = as_ctype(options[name]['type'])
+    if None == ctype :
+        has_arg = 0
+    else :
+        has_arg = 1
     options[name]['ctype'] = ctype
     cname = name.replace('-','_')
     options[name]['cname'] = cname
@@ -226,7 +288,8 @@ for name in options :
     options[name]['enum'] = enum
     function_code.add(options[name])
     cmdline_options.add(options[name])
-    struct_option += format_struct_option % (name,1,enum)
+    cmdline_help.add(options[name])
+    struct_option += format_struct_option % (name,has_arg,enum)
     enums += ', %s'%(enum)
 
 struct_option += """  { .name = NULL, .has_arg = 0, .flag = NULL, .val = 0 }
@@ -236,22 +299,23 @@ struct_option += """  { .name = NULL, .has_arg = 0, .flag = NULL, .val = 0 }
 enums += """};
 """
 
-fh = open('auto.c','w')
+fh = open('cmdline.c','w')
 fh.write("""
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <getopt.h>
-#include "long_opt.h"
+#include "cmdline.h"
 """)
 fh.write(support_code);
 fh.write(cmdline_options.c_code())
 fh.write(enums)
 fh.write(struct_option % (len(options)+1))
+fh.write(cmdline_help.c_code());
 fh.write(function_code.render())
 fh.close()
 
-fh = open('long_opt.h','w')
+fh = open('cmdline.h','w')
 fh.write("""
 #include <stdint.h>
 """)
